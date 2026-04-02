@@ -1,0 +1,13 @@
+BasedOnStyle: LLVM
+ColumnLimit: 100
+
+CommentPragmas: '^'
+ReflowComments: false
+
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+
+Cpp11BracedListStyle: true
+AlignArrayOfStructures: Left
