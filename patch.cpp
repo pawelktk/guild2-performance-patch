@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <intrin.h>
 #include <iostream>
+#include <numeric>
 #include <string>
 #include <vector>
 #include <windows.h>
@@ -19,12 +21,20 @@ struct Config {
   static bool EnableO1ShadowCache;
 
   // Negative Cache Settings
+  static bool EnableNegativeCacheDeduplication;
   static DWORD NegativeCacheExpirationMs;
   static int DistanceTolerance;
 
   // Memory Settings
   static size_t MaxPathNodes;
   static int MaxGridIndex;
+
+  // Benchmarking
+  static bool EnableBenchmark;
+  static int BenchmarkIterations;
+  static int WarmupTicks;
+  static bool ExitAfterBenchmark;
+  static bool EnableRandDeterminism;
 
   static std::string GetIniPath() {
     char path[MAX_PATH];
@@ -52,30 +62,35 @@ struct Config {
 
             outfile << "[Features]\n";
             outfile << "; Replaces the slow list findInsert with a hardware-prefetch optimized version. (1 = ON, 0 = OFF)\n";
-            outfile << "; Impact: Very High. The game spends most CPU time here. The compilers optimizations this path is compiled with also really help here. \n";
+            outfile << "; Impact: High-Very high (with EnableObjectPool). The game spends most CPU time here. The compilers optimizations this path is compiled with also really help here. \n";
+            outfile << "; IMPORTANT: I HIGHLY recommend using it with EnableObjectPool to get the full effect. \n";
             outfile << "EnableListTraversalPrefetch=1\n\n";
 
-            outfile << "; Drops A* SingleStep requests to unreachable areas and puts them on timeout. (1 = ON, 0 = OFF)\n";
-            outfile << "; Impact: Very High-Extreme(on long-running campaigns).\n";
-            outfile << "EnableNegativeCache=1\n\n";
-
             outfile << "; Uses a pre-allocated contiguous memory block instead of the fragmented STLPort allocator. (1 = ON, 0 = OFF)\n";
-            outfile << "; Impact: High. Should be more cache-friendly.\n";
+            outfile << "; Impact: High-Very high (with EnableListTraversalPrefetch). Should be more cache-friendly.\n";
             outfile << "EnableObjectPool=1\n\n";
 
+            outfile << "; Drops A* SingleStep requests to unreachable areas and puts them on timeout. (1 = ON, 0 = OFF)\n";
+            outfile << "; Impact: Miniscule-Extreme(on long-running campaigns).\n";
+            outfile << "EnableNegativeCache=1\n\n";
+
             outfile << "; Bypasses the engine's Red-Black tree lookups with an O(1) array cache. (1 = ON, 0 = OFF)\n";
-            outfile << "; Impact: Meh. It's not on the hot path.\n";
+            outfile << "; Impact: High.\n";
             outfile << "EnableO1ShadowCache=1\n\n";
 
             outfile << "[NegativeCache]\n";
+
             outfile << "; How long (in milliseconds) a blocked path is blacklisted.\n";
             outfile << "; Higher = better performance when stuck, but moving objects take longer to realize a path opened up.\n";
             outfile << "ExpirationMs=60000\n\n";
 
             outfile << "; How many grid cells around the failed startpos/endpos pair should also be considered blocked.\n";
             outfile << "; Higher = faster quarantine of blocked areas, but might falsely block valid nearby paths.\n";
-            outfile << "; IMPORTANT: With higher DistanceTolerance performance gains can be massive, but if set too high it can cause some valid paths to become unpassable. From my testing 10 is a sweet spot - lower it if you encounter pathfinding issues.\n";
+            outfile << "; IMPORTANT: If set too high it can cause some valid paths to become unpassable. From my testing 10 is a sweet spot - lower it if you encounter pathfinding issues.\n";
             outfile << "DistanceTolerance=10\n\n";
+
+            //outfile << "; OBSOLETE - it doesn't change much, the vector is way to small for this to have any effect.\n";
+            //outfile << "EnableDeduplication=0\n\n";
 
             outfile << "[MemoryPools]\n";
             outfile << "; Maximum number of A* path nodes (0x2C size) that can exist at once.\n";
@@ -85,7 +100,19 @@ struct Config {
             outfile << "[ShadowCache]\n";
             outfile << "; Maximum grid index for the map. 8000000 is a good compomise to not run out of addressable space.\n";
             outfile << "; Default: 8000000 (Takes ~96MB RAM). ~50%% of requests get cached\n";
-            outfile << "MaxGridIndex=8000000\n";
+            outfile << "MaxGridIndex=8000000\n\n";
+
+            outfile << "[Benchmark]\n";
+            outfile << "; 1 = ON, 0 = OFF\n";
+            outfile << "EnableBenchmark=0\n";
+            outfile << "; Overrides the random number generator to always return the average (max/2) to stabilize the state between runs.\n";
+            outfile << "EnableRandDeterminism=0\n";
+            outfile << "; Number of calls to measure\n";
+            outfile << "BenchmarkIterations=5000\n";
+            outfile << "; Number of initial calls to discard (warmup)\n";
+            outfile << "WarmupTicks=100\n";
+            outfile << "; Automatically close the game after benchmark finishes (1 = ON, 0 = OFF)\n";
+            outfile << "ExitAfterBenchmark=0\n\n";
             
             outfile.close();
         }
@@ -95,11 +122,18 @@ struct Config {
         EnableObjectPool = GetPrivateProfileIntA("Features", "EnableObjectPool", 1, iniPath.c_str()) != 0;
         EnableO1ShadowCache = GetPrivateProfileIntA("Features", "EnableO1ShadowCache", 1, iniPath.c_str()) != 0;
 
+        EnableNegativeCacheDeduplication = GetPrivateProfileIntA("NegativeCache", "EnableDeduplication", 0, iniPath.c_str()) != 0;
         NegativeCacheExpirationMs = GetPrivateProfileIntA("NegativeCache", "ExpirationMs", 60000, iniPath.c_str());
-        DistanceTolerance = GetPrivateProfileIntA("NegativeCache", "DistanceTolerance", 15, iniPath.c_str());
+        DistanceTolerance = GetPrivateProfileIntA("NegativeCache", "DistanceTolerance", 10, iniPath.c_str());
 
         MaxPathNodes = GetPrivateProfileIntA("MemoryPools", "MaxPathNodes", 100000, iniPath.c_str());
         MaxGridIndex = GetPrivateProfileIntA("ShadowCache", "MaxGridIndex", 8000000, iniPath.c_str());
+
+        EnableBenchmark = GetPrivateProfileIntA("Benchmark", "EnableBenchmark", 0, iniPath.c_str()) != 0;
+        EnableRandDeterminism = GetPrivateProfileIntA("Benchmark", "EnableRandDeterminism", 0, iniPath.c_str()) != 0;
+        BenchmarkIterations = GetPrivateProfileIntA("Benchmark", "BenchmarkIterations", 5000, iniPath.c_str());
+        WarmupTicks = GetPrivateProfileIntA("Benchmark", "WarmupTicks", 100, iniPath.c_str());
+        ExitAfterBenchmark = GetPrivateProfileIntA("Benchmark", "ExitAfterBenchmark", 0, iniPath.c_str()) != 0;
 
         // Safety check: O(1) Cache requires Object Pool's deallocation hook to invalidate its generation counter.
         if (!EnableObjectPool && EnableO1ShadowCache) {
@@ -113,10 +147,16 @@ bool Config::EnableListTraversalPrefetch = true;
 bool Config::EnableNegativeCache = true;
 bool Config::EnableObjectPool = true;
 bool Config::EnableO1ShadowCache = true;
+bool Config::EnableNegativeCacheDeduplication = false;
 DWORD Config::NegativeCacheExpirationMs = 60000;
-int Config::DistanceTolerance = 15;
+int Config::DistanceTolerance = 10;
 size_t Config::MaxPathNodes = 100000;
 int Config::MaxGridIndex = 8000000;
+bool Config::EnableBenchmark = false;
+bool Config::EnableRandDeterminism = false;
+int Config::BenchmarkIterations = 5000;
+int Config::WarmupTicks = 100;
+bool Config::ExitAfterBenchmark = false;
 
 // ============================================================================
 // ENGINE STRUCTURES AND OFFSETS
@@ -151,7 +191,6 @@ const int TARGET_POS_OFFSET = 0x44;
 // MEMORY MANAGEMENT AND CACHING
 // ============================================================================
 
-// Contiguous Memory Pool
 class ContiguousMemoryPool {
 private:
   size_t nodeSize;
@@ -194,25 +233,24 @@ public:
 
 ContiguousMemoryPool *g_GlobalPathPool = nullptr;
 
-// Negative Cache
-struct FailedPathCacheEntry {
-  Vector2i startPos;
-  Vector2i targetPos;
-  DWORD timestamp;
-};
-
 class PathCacheManager {
 private:
-  std::vector<FailedPathCacheEntry> failedPaths;
-
   bool IsCloseEnough(const Vector2i &a, const Vector2i &b) {
     return std::abs(a.x - b.x) <= Config::DistanceTolerance &&
            std::abs(a.y - b.y) <= Config::DistanceTolerance;
   }
 
 public:
+  struct FailedPathCacheEntry {
+    Vector2i startPos;
+    Vector2i targetPos;
+    DWORD timestamp;
+  };
+  std::vector<FailedPathCacheEntry> failedPaths;
+
   bool IsPathUnreachable(Vector2i *startPos, Vector2i *targetPos) {
     DWORD currentTime = GetTickCount();
+
     for (auto it = failedPaths.begin(); it != failedPaths.end();) {
       if (currentTime - it->timestamp > Config::NegativeCacheExpirationMs) {
         it = failedPaths.erase(it);
@@ -227,6 +265,18 @@ public:
   }
 
   void RegisterFailedPath(Vector2i *startPos, Vector2i *targetPos) {
+    // --- DEDUPLICATION (OBSOLETE) ---
+    if (Config::EnableNegativeCacheDeduplication) {
+      for (auto &entry : failedPaths) {
+        if (IsCloseEnough(*startPos, entry.startPos) &&
+            IsCloseEnough(*targetPos, entry.targetPos)) {
+          entry.timestamp = GetTickCount();
+          return;
+        }
+      }
+    }
+    // ------
+
     FailedPathCacheEntry entry = {*startPos, *targetPos, GetTickCount()};
     failedPaths.push_back(entry);
   }
@@ -277,6 +327,107 @@ void PatchIndirectCallInstruction(DWORD callAddress, void *hookedFunction) {
   VirtualProtect((void *)callAddress, 6, oldProtect, &oldProtect);
 }
 
+// bypasses the need for an existing CALL instruction, overwrites the target address with a direct JMP
+void PatchJmpInstruction(DWORD address, void *hookedFunction) {
+  DWORD oldProtect;
+  VirtualProtect((void *)address, 5, PAGE_EXECUTE_READWRITE, &oldProtect);
+  *(BYTE *)address = 0xE9;
+  *(DWORD *)(address + 1) = (DWORD)hookedFunction - address - 5;
+  VirtualProtect((void *)address, 5, oldProtect, &oldProtect);
+}
+
+// ============================================================================
+// BENCHMARK & PROFILING SYSTEM
+// ============================================================================
+
+typedef bool(__fastcall *PathFinder_Update_t)(void *pThis, void *edxDummy);
+PathFinder_Update_t Original_PathFinder_Update = (PathFinder_Update_t)0x005121F0;
+
+int g_WarmupRemaining = 0;
+int g_CurrentSamples = 0;
+std::vector<double> g_SampleDurations;
+
+bool __fastcall Hooked_PathFinder_Update(void *pThis, void *edxDummy) {
+  if (!Config::EnableBenchmark) {
+    return Original_PathFinder_Update(pThis, edxDummy);
+  }
+
+  if (g_WarmupRemaining > 0) {
+    g_WarmupRemaining--;
+    return Original_PathFinder_Update(pThis, edxDummy);
+  }
+
+  auto startTime = std::chrono::high_resolution_clock::now();
+  bool result = Original_PathFinder_Update(pThis, edxDummy);
+  auto endTime = std::chrono::high_resolution_clock::now();
+
+  std::chrono::duration<double, std::milli> elapsed = endTime - startTime;
+  g_SampleDurations.push_back(elapsed.count());
+  g_CurrentSamples++;
+
+  if (g_CurrentSamples >= Config::BenchmarkIterations) {
+    std::ofstream logFile("pathfinding_benchmark.log", std::ios::app);
+    if (logFile.is_open()) {
+      std::sort(g_SampleDurations.begin(), g_SampleDurations.end());
+
+      double sumPathFinder =
+          std::accumulate(g_SampleDurations.begin(), g_SampleDurations.end(), 0.0);
+      double avg = sumPathFinder / g_CurrentSamples;
+      double minVal = g_SampleDurations.front();
+      double maxVal = g_SampleDurations.back();
+      double median = g_SampleDurations[g_CurrentSamples / 2];
+
+      logFile << "=== PATHFINDING REPORT ===\n";
+      logFile << "Total Samples:  " << g_CurrentSamples
+              << " (Discarded warmup: " << Config::WarmupTicks << ")\n";
+      logFile << "Avg Duration:   " << avg << " ms\n";
+      logFile << "Median:         " << median << " ms\n";
+      logFile << "Min Duration:   " << minVal << " ms\n";
+      logFile << "Max Duration:   " << maxVal << " ms\n";
+      logFile << "TOTAL DURATION: " << sumPathFinder << " ms\n";
+
+      logFile << "--- Active Modules & Sub-Configs ---\n";
+      logFile << "List Prefetch:  " << (Config::EnableListTraversalPrefetch ? "ON" : "OFF") << "\n";
+
+      if (Config::EnableNegativeCache) {
+        logFile << "Negative Cache: ON (Legacy Vector O(N))\n";
+        //logFile << "   -> Deduplication: " << (Config::EnableNegativeCacheDeduplication ? "ON" : "OFF") << "\n";
+        logFile << "   -> Tolerance:  " << Config::DistanceTolerance << "\n";
+        logFile << "   -> Expiration: " << Config::NegativeCacheExpirationMs << "ms\n";
+        logFile << "   -> Vector Size at snapshot: " << g_PathCache.failedPaths.size() << "\n";
+      } else {
+        logFile << "Negative Cache: OFF\n";
+      }
+
+      if (Config::EnableObjectPool) {
+        logFile << "Object Pool:    ON (Nodes: " << Config::MaxPathNodes << ")\n";
+      } else {
+        logFile << "Object Pool:    OFF\n";
+      }
+
+      if (Config::EnableO1ShadowCache) {
+        logFile << "O(1) Cache:     ON (GridIdx: " << Config::MaxGridIndex << ")\n";
+      } else {
+        logFile << "O(1) Cache:     OFF\n";
+      }
+
+      logFile << "RandDeterminism: " << (Config::EnableRandDeterminism ? "ON" : "OFF") << "\n";
+      logFile << "================================\n\n";
+      logFile.close();
+    }
+
+    if (Config::ExitAfterBenchmark) {
+      TerminateProcess(GetCurrentProcess(), 0);
+    }
+
+    g_CurrentSamples = 0;
+    g_SampleDurations.clear();
+    g_WarmupRemaining = Config::WarmupTicks;
+  }
+
+  return result;
+}
+
 // ============================================================================
 // HOOK IMPLEMENTATIONS
 // ============================================================================
@@ -300,34 +451,17 @@ void __cdecl Hooked_STL_Deallocate(void *ptr, size_t size) {
   free(ptr);
 }
 
-long long bypassed = 0;
-long long notbypassed = 0;
-
-// Binary Tree Shadow Cache
 void __fastcall Hooked_TreeFind_Local(void *pThis, void *edxDummy, void **outIter, int *searchKey) {
   int key = *searchKey;
-#ifdef DEBUGSTUFF
-  if (bypassed + notbypassed == 100000000) {
-    std::ofstream f("bypassed");
-    f << "Bypassed: " << bypassed << std::endl;
-    f << "notbypassed: " << notbypassed << std::endl;
-    f.close();
-  }
-#endif
 
   if (key >= 0 && key < Config::MaxGridIndex) {
     if (g_TreeCache[key].searchGeneration == g_CurrentSearchGeneration &&
         g_TreeCache[key].treeSentinel == pThis) {
       *outIter = g_TreeCache[key].treeNode;
-#ifdef DEBUGSTUFF
-      bypassed++;
-#endif
       return;
     }
   }
-#ifdef DEBUGSTUFF
-  notbypassed++;
-#endif
+
   Original_TreeFind(pThis, edxDummy, outIter, searchKey);
 
   if (*outIter != pThis && key >= 0 && key < Config::MaxGridIndex) {
@@ -396,6 +530,20 @@ extern "C" void __stdcall OptimizedFindInsertNode(void **outNode,
   *outNode = sentinelNode;
 }
 
+int __fastcall Hooked_Rand(void *pThis, void *edxDummy, int max) {
+  if (max == 0) {
+    return 0;
+  }
+  return max / 2; // Always return the exact middle integer
+}
+
+float __fastcall Hooked_Randf(void *pThis, void *edxDummy, float max) {
+  if (max < 1e-05f) {
+    return 0.0f;
+  }
+  return max * 0.5f; // Always return the exact middle float
+}
+
 // ============================================================================
 // HOOK INSTALLERS
 // ============================================================================
@@ -447,6 +595,16 @@ void InstallLocalizedTreeFindHook() {
   PatchCallInstruction(0x00567034, (void *)Hooked_TreeFind_Local);
 }
 
+void InstallBenchmarkHook() {
+  const DWORD PATHFINDER_UPDATE_CALL_ADDR = 0x0050584b;
+  PatchCallInstruction(PATHFINDER_UPDATE_CALL_ADDR, (void *)Hooked_PathFinder_Update);
+}
+
+void InstallRandDeterminismHook() {
+  PatchJmpInstruction(0x00743200, (void *)Hooked_Rand);
+  PatchJmpInstruction(0x00743230, (void *)Hooked_Randf);
+}
+
 // ============================================================================
 // D3D9 PROXY & DLL MAIN
 // ============================================================================
@@ -477,6 +635,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     DisableThreadLibraryCalls(hModule);
 
     Config::LoadOrGenerate();
+
     if (Config::EnableListTraversalPrefetch)
       InstallPathfindingOptimization();
     if (Config::EnableNegativeCache)
@@ -485,6 +644,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       InstallObjectPoolAllocators();
     if (Config::EnableO1ShadowCache)
       InstallLocalizedTreeFindHook();
+
+    if (Config::EnableBenchmark) {
+      if (Config::EnableRandDeterminism) {
+        InstallRandDeterminismHook();
+      }
+      g_WarmupRemaining = Config::WarmupTicks;
+      InstallBenchmarkHook();
+    }
   } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
     // cleanup
     if (g_GlobalPathPool)
