@@ -141,4 +141,10 @@ This patch is primarly intended for single-player campaigns. I haven't tested it
 The *NegativeCache* option would 100% not work in multiplayer by the virtue of how the timestamps work.
 The other options should theoretically work provided all players use the patch and have similiar PC setups (used compiler optimizations may result in slight differences in floating point operations results on different processors, which may desync the game)
 
+# Notes on possible improvements
+
+1. The A* Open List shouldn't be a simple doubly-linked list in the first place. Replacing it with a binary/fibonacci heap would bring massive performance gains in the hot-path, but would require changing the internal structure of the pathfinder.
+2. Don't use the single-stepping this much in the first place. The game should utilize the navmesh more. That would require some major architectural changes in how the pathfinder works
+3. The entire simulation runs on a single thread. Making the pathfinder multi-threaded would require tearing down everything from cl_PathFinder::Update downwards and rewriting it in a way that doesn't change the global state in the parts that would be offloaded to other threads.
+4. Rewrite and recompile the entire pathfinder to utilize better compiler optimizations
 
