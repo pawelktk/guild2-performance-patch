@@ -65,7 +65,7 @@ In the early game, the improvements aren't that spectacular, but it's still a so
 
 # Patch installation
 
-1. Download the compiled d3d9.dll
+1. Download the compiled d3d9.dll from [Releases](https://github.com/pawelktk/guild2-performance-patch/releases)
 2. Place the d3d9.dll file directly into your The Guild 2 main installation directory (the same folder that contains the game's executable .exe file).
 3. Launch the game. If everything is working correctly, *pawels_optimization_path.ini* file should appear in your game directory
 
