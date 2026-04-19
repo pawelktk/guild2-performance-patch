@@ -609,6 +609,17 @@ void InstallRandDeterminismHook() {
 // D3D9 PROXY & DLL MAIN
 // ============================================================================
 
+
+// stubs, should fix any problems with overlays
+extern "C" void WINAPI D3DPERF_SetMarker(DWORD color, LPCWSTR name) {}
+extern "C" int WINAPI D3DPERF_BeginEvent(DWORD color, LPCWSTR name) { return 0; }
+extern "C" int WINAPI D3DPERF_EndEvent() { return 0; }
+extern "C" void WINAPI D3DPERF_SetOptions(DWORD options) {}
+extern "C" DWORD WINAPI D3DPERF_GetStatus() { return 0; }
+extern "C" BOOL WINAPI D3DPERF_QueryRepeatFrame() { return FALSE; }
+
+
+
 typedef void *(WINAPI *Direct3DCreate9_t)(unsigned int);
 Direct3DCreate9_t Original_Direct3DCreate9 = nullptr;
 
